@@ -1,0 +1,64 @@
+name: build
+
+on:
+  pull_request:
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    if: startsWith(github.head_ref, 'renovate') == false
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Detect Version for Docker
+        id: docker-version
+        run: echo "VERSION=$(SEP="-" scripts/version)" >> $GITHUB_OUTPUT
+      - name: Detect Version
+        id: version
+        run: echo "VERSION=$(scripts/version)" >> $GITHUB_OUTPUT
+    outputs:
+      docker-version: ${{ steps.docker-version.outputs.VERSION }}
+      version: ${{ steps.version.outputs.VERSION }}
+
+  build:
+    runs-on: ubuntu-latest
+    needs:
+      - version
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version: '1.27'
+          check-latest: true # https://github.com/actions/setup-go#check-latest-version
+          cache: true # https://github.com/actions/setup-go#caching-dependency-files-and-build-outputs
+
+      - name: Build
+        run: go build -race ./...
+
+      - name: Install GoReleaser
+        uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: latest
+          install-only: true
+
+      - name: Snapshot
+        run: make snapshot
+        env:
+          GORELEASER_CURRENT_TAG: ${{ needs.version.outputs.docker-version }}
+
+      - name: Grype scan
+        id: scan
+        uses: anchore/scan-action@27805bf3b4e84b4a5c980df22ed233c00390a439 # v7.4.2
+        with:
+          path: "."
+          fail-build: true
+          severity-cutoff: high
+          output-format: sarif
+
+      - name: Upload SARIF report
+        uses: github/codeql-action/upload-sarif@9b3254085494b55a0f7c4c2b3d2d52cc712ce370 # v4.39.1
+        with:
+          sarif_file: ${{ steps.scan.outputs.sarif }}
